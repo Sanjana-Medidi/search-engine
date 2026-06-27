@@ -1,12 +1,104 @@
 name: CI
-on: [push, pull_request]
+
+on:
+  push:
+    branches: ["main", "master"]
+  pull_request:
+    branches: ["main", "master"]
+
 jobs:
+  # ── 1. Unit tests ────────────────────────────────────────────────────────────
   test:
+    name: Unit Tests
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with: { python-version: "3.11" }
-      - run: pip install -e ".[dev]"
-      - run: ruff check src tests
-      - run: pytest tests/ -v
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run pytest
+        run: pytest tests/ -v --tb=short
+
+  # ── 2. Docker build check ────────────────────────────────────────────────────
+  docker-build:
+    name: Docker Build
+    runs-on: ubuntu-latest
+    needs: test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: docker build -t search-engine:ci .
+
+      - name: Smoke-test container
+        run: |
+          docker run -d --name se-smoke -p 8000:8000 search-engine:ci
+          sleep 10
+          curl --fail http://localhost:8000/health || (docker logs se-smoke && exit 1)
+          docker stop se-smoke
+
+  # ── 3. Eval gate ─────────────────────────────────────────────────────────────
+  eval:
+    name: Eval Gate (NDCG@10 regression check)
+    runs-on: ubuntu-latest
+    needs: test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # Cache the pre-built eval corpus so CI doesn't re-download MS MARCO
+      - name: Cache eval corpus
+        uses: actions/cache@v4
+        with:
+          path: data/eval_v2
+          key: eval-corpus-v1
+
+      - name: Run evaluation
+        run: |
+          python -m src.eval.evaluate \
+            --eval-dir data/eval_v2 \
+            --top-k 100 \
+            | tee eval_output.txt
+
+      - name: Check NDCG@10 threshold
+        run: |
+          python - <<'EOF'
+          import re, sys
+          text = open("eval_output.txt").read()
+          # find the reranker ndcg@10 line
+          m = re.search(r"ndcg@10\s+([\d.]+)\s+([\d.]+)", text)
+          if not m:
+              print("Could not parse eval output"); sys.exit(1)
+          bm25_ndcg   = float(m.group(1))
+          rerank_ndcg = float(m.group(2))
+          print(f"BM25 NDCG@10: {bm25_ndcg:.4f}  |  Reranker NDCG@10: {rerank_ndcg:.4f}")
+          # Fail CI if reranker is worse than BM25 baseline (regression guard)
+          if rerank_ndcg < bm25_ndcg:
+              print("FAIL: reranker regressed below BM25 baseline!")
+              sys.exit(1)
+          print("PASS: reranker is at or above BM25 baseline.")
+          EOF
+
+      - name: Upload eval results
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-results
+          path: eval_output.txt

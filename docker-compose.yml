@@ -1,0 +1,42 @@
+version: "3.9"
+
+services:
+  search-engine:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    image: search-engine:latest
+    container_name: search-engine
+    ports:
+      - "8000:8000"
+    environment:
+      - WORKERS=2
+    volumes:
+      # Mount data directory so the index persists across restarts
+      - ./data:/app/data
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped
+
+  # Optional: run load tests against the running service
+  locust:
+    image: locustio/locust:2.37.1
+    container_name: locust
+    ports:
+      - "8089:8089"         # Locust web UI
+    volumes:
+      - ./tests:/mnt/locust
+    command: >
+      -f /mnt/locust/locustfile.py
+      --host http://search-engine:8000
+    depends_on:
+      search-engine:
+        condition: service_healthy
+    profiles:
+      - loadtest              # only starts with: docker compose --profile loadtest up

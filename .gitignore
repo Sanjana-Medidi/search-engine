@@ -1,20 +1,15 @@
-# Virtual Environment
-venv/
-.venv/
-env/
-
-# Python cache
+@'
+# Python
 __pycache__/
 *.pyc
-*.pyo
-*.pyd
+.pytest_cache/
+venv/
 
-# Data and Indexing
-data/
-*.json
+# Large MS MARCO files (too big for GitHub)
+data/msmarco/
+data/eval_v2/passages.tsv
 
-# OS files
-.DS_Store
-Thumbs.db
-
+# Temp scripts
+load_index.py
+'@ | Out-File -FilePath .gitignore -Encoding utf8S
 notes.md
