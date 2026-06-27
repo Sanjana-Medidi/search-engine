@@ -34,3 +34,5 @@ select = ["E", "F", "I"]
 
 [tool.mypy]
 strict = true
+[tool.pytest.ini_options]
+pythonpath = ["."]
